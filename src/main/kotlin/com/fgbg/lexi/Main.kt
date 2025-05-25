@@ -1,10 +1,22 @@
-import java.awt.Graphics
-import java.awt.Point
+import java.awt.*
+import java.awt.event.InputMethodEvent
+import java.awt.event.InputMethodListener
+import java.awt.event.KeyAdapter
+import java.awt.event.KeyEvent
+import java.awt.font.TextHitInfo
+import java.awt.im.InputMethodRequests
+import java.text.AttributedCharacterIterator
+import java.text.AttributedString
+import javax.swing.JComponent
+import javax.swing.Timer
+import javax.swing.text.AttributeSet
+import javax.swing.text.JTextComponent
 
 data class vec2(val x: Int, val y: Int)
 data class vec4(val x: Int, val y: Int, val w: Int, val h: Int)
 
 fun vec4(x: Int, y: Int, size: vec2): vec4 = vec4(x, y, size.x, size.y)
+fun Char.isASCII(): Boolean = this <= '\u007F'
 
 interface Glyph {
     /**
@@ -47,6 +59,10 @@ class Character(private val char: Char) : Glyph {
     override fun intersects(p: java.awt.Point): Boolean = false
 
     override fun getWidth(): Int {
+//        if (char == 'i' || char == 'l' || char == 'j') {
+//            return this.size.x + offset + 1
+//        }
+//        return this.size.x + offset
         return this.size.x + offset
     }
 
@@ -290,47 +306,103 @@ class SimpleCompositor : Compositor {
     override fun compose() {}
 }
 
-class Editor : javax.swing.JPanel() {
+
+class Editor : JComponent() {
     private val composition = Composition(DefaultGlyph())
 
     init {
         isFocusable = true
-        background = java.awt.Color.WHITE
+        background = Color.WHITE
 
-        javax.swing.Timer(500) {
-            repaint()
-        }.start()
+        // enable InputMethodEvent for on-the-spot pre-editing
+        enableEvents(AWTEvent.KEY_EVENT_MASK or AWTEvent.INPUT_METHOD_EVENT_MASK)
+        enableInputMethods(true)
 
-        addKeyListener(object : java.awt.event.KeyAdapter() {
-            override fun keyPressed(e: java.awt.event.KeyEvent) {
+        // 定时刷新（可选）
+        Timer(500) { repaint() }.start()
+
+        addKeyListener(object : KeyAdapter() {
+            override fun keyPressed(e: KeyEvent) {
                 when (e.keyCode) {
-                    java.awt.event.KeyEvent.VK_LEFT -> composition.moveLeft()
-                    java.awt.event.KeyEvent.VK_RIGHT -> composition.moveRight()
-                    java.awt.event.KeyEvent.VK_UP -> composition.moveUp()
-                    java.awt.event.KeyEvent.VK_DOWN -> composition.moveDown()
-                    java.awt.event.KeyEvent.VK_BACK_SPACE -> composition.delete()
-                    java.awt.event.KeyEvent.VK_ENTER -> composition.newLine()
+                    KeyEvent.VK_LEFT -> composition.moveLeft()
+                    KeyEvent.VK_RIGHT -> composition.moveRight()
+                    KeyEvent.VK_UP -> composition.moveUp()
+                    KeyEvent.VK_DOWN -> composition.moveDown()
+                    KeyEvent.VK_BACK_SPACE -> composition.delete()
+                    KeyEvent.VK_ENTER -> composition.newLine()
                 }
                 repaint()
             }
 
-            override fun keyTyped(e: java.awt.event.KeyEvent) {
+            override fun keyTyped(e: KeyEvent) {
                 val ch = e.keyChar
                 if (ch == '\n') return
-                if (ch.isLetterOrDigit() || ch.isWhitespace()) {
+
+                // 只处理 ASCII 字符，中文交给输入法处理
+                if (ch.isASCII() && !ch.isISOControl()) {
                     composition.insert(Character(ch))
                     repaint()
+                    e.consume() // 吞掉事件
                 }
             }
         })
     }
 
-    override fun paintComponent(g: java.awt.Graphics) {
-        super.paintComponent(g)
+    override fun getInputMethodRequests(): InputMethodRequests {
+        return object: InputMethodRequests {
+            override fun getTextLocation(offset: TextHitInfo?): Rectangle {
+                TODO("Not yet implemented")
+                println("getTextLocation: $offset")
+            }
 
+            override fun getLocationOffset(x: Int, y: Int): TextHitInfo? {
+                println("getLocationOffset: $x, $y")
+                return null
+            }
+
+            override fun getInsertPositionOffset(): Int {
+                println("getInsertPositionOffset")
+                return 0 // 插入点在光标位置
+            }
+
+            override fun getCommittedText(
+                beginIndex: Int,
+                endIndex: Int,
+                attributes: Array<out AttributedCharacterIterator.Attribute>?
+            ): AttributedCharacterIterator {
+                TODO("Not yet implemented")
+                println("getCommittedText: $beginIndex, $endIndex, $attributes")
+            }
+
+            override fun getCommittedTextLength(): Int {
+                println("getCommittedTextLength")
+                return 0
+            }
+
+            override fun cancelLatestCommittedText(attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator? {
+                println("cancelLatestCommittedText")
+                TODO("Not yet implemented")
+            }
+
+            override fun getSelectedText(attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator? {
+                println("getSelectedText")
+                TODO("Not yet implemented")
+            }
+        }
+    }
+
+    override fun processInputMethodEvent(e: InputMethodEvent?) {
+        println("abab")
+        super.processInputMethodEvent(e)
+        println("processInputMethodEvent: $e")
+    }
+
+    override fun paintComponent(g: Graphics) {
+        super.paintComponent(g)
         composition.draw(g)
     }
 }
+
 
 fun main() {
     javax.swing.SwingUtilities.invokeLater {
