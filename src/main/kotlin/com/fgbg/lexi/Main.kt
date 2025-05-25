@@ -1,8 +1,5 @@
 import java.awt.*
-import java.awt.event.InputMethodEvent
-import java.awt.event.KeyAdapter
-import java.awt.event.KeyEvent
-import java.awt.event.MouseEvent
+import java.awt.event.*
 import java.awt.font.TextHitInfo
 import java.awt.im.InputMethodRequests
 import java.text.AttributedCharacterIterator
@@ -165,13 +162,49 @@ class Composition(glyph: Glyph) : Glyph by glyph {
     private val rows = mutableListOf<Row>()
     private val compositor: Compositor = SimpleCompositor()
     private var caretVisible = true
-
-    private var caret = Caret(
+    var caret = Caret(
         0, 0, 0, 0, 0,
         java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
             .defaultScreenDevice.defaultConfiguration.createCompatibleImage(1, 1).graphics,
         500
     )
+
+    // 添加选中状态
+    var selectionStart: Vec2 = Vec2(-1, -1)  // 选中起始位置 (row, col)
+    var selectionEnd: Vec2 = Vec2(-1, -1)    // 选中结束位置
+
+    // 检查是否有选中文本
+    fun hasSelection(): Boolean = selectionStart.x >= 0 && selectionEnd.x >= 0
+
+    // 清除选中状态
+    fun clearSelection() {
+        selectionStart = Vec2(-1, -1)
+        selectionEnd = Vec2(-1, -1)
+    }
+
+    // 获取选中范围内的所有字符
+    fun getSelectedText(): String {
+        if (!hasSelection()) return ""
+
+        val (startRow, startCol) = selectionStart
+        val (endRow, endCol) = selectionEnd
+
+        val builder = StringBuilder()
+        for (row in minOf(startRow, endRow)..maxOf(startRow, endRow)) {
+            if (row !in rows.indices) continue
+
+            val rowStart = if (row == minOf(startRow, endRow)) minOf(startCol, endCol) else 0
+            val rowEnd = if (row == maxOf(startRow, endRow)) maxOf(startCol, endCol) else rows[row].getChildren().size
+
+            for (col in rowStart until rowEnd) {
+                if (col in rows[row].getChildren().indices) {
+                    val char = (rows[row].getChildren()[col] as? Character)?.getChar() ?: ' '
+                    builder.append(char)
+                }
+            }
+        }
+        return builder.toString()
+    }
 
     init {
         rows.add(Row())
@@ -271,13 +304,53 @@ class Composition(glyph: Glyph) : Glyph by glyph {
 
         layout(g)
 
+        // 绘制选中背景
+        if (hasSelection()) {
+            drawSelection(g)
+        }
+
+        // 绘制文本
         for (row in rows) {
             row.draw(g)
         }
 
+        // 绘制光标
         if (caretVisible) {
             g.drawLine(caret.x, caret.y, caret.x, caret.y + caret.h)
         }
+    }
+
+    private fun drawSelection(g: Graphics) {
+        val (startRow, startCol) = selectionStart
+        val (endRow, endCol) = selectionEnd
+
+        val normalizedStartRow = minOf(startRow, endRow)
+        val normalizedEndRow = maxOf(startRow, endRow)
+        val normalizedStartCol = if (startRow < endRow) startCol else endCol
+        val normalizedEndCol = if (startRow > endRow) startCol else endCol
+
+        g.color = Color(0, 120, 215, 100) // 半透明蓝色背景
+
+        for (row in normalizedStartRow..normalizedEndRow) {
+            if (row !in rows.indices) continue
+
+            val rowStart = if (row == normalizedStartRow) normalizedStartCol else 0
+            val rowEnd = if (row == normalizedEndRow) normalizedEndCol else rows[row].getChildren().size
+
+            if (rowStart >= rowEnd) continue
+
+            val startGlyph = rows[row].indexAt(rowStart) ?: continue
+            val endGlyph = rows[row].indexAt(rowEnd - 1) ?: continue
+
+            val x1 = startGlyph.getPosition().x
+            val x2 = endGlyph.getPosition().x + endGlyph.getWidth()
+            val y = rows[row].getPosition().y
+            val height = rows[row].getHeight()
+
+            g.fillRect(x1, y, x2 - x1, height)
+        }
+
+        g.color = Color.BLACK // 恢复默认颜色
     }
 
     fun getRows(): List<Row> = rows
@@ -342,6 +415,7 @@ class SimpleCompositor : Compositor {
 
 class Editor : JComponent() {
     private val composition = Composition(DefaultGlyph())
+    private var isDragging = false
 
     init {
         isFocusable = true
@@ -386,6 +460,35 @@ class Editor : JComponent() {
                 e?: return
                 composition.moveCaret(e.x, e.y)
                 repaint()
+            }
+        })
+
+        addMouseListener(object : MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) {
+                if (e.button == MouseEvent.BUTTON1) { // 左键按下
+                    isDragging = true
+                    composition.clearSelection()
+                    composition.moveCaret(e.x, e.y)
+                    composition.selectionStart = Vec2(composition.caret.row, composition.caret.col)
+                    repaint()
+                }
+            }
+
+            override fun mouseReleased(e: MouseEvent) {
+                if (e.button == MouseEvent.BUTTON1) {
+                    isDragging = false
+                    repaint()
+                }
+            }
+        })
+
+        addMouseMotionListener(object : MouseMotionAdapter() {
+            override fun mouseDragged(e: MouseEvent) {
+                if (isDragging) {
+                    composition.moveCaret(e.x, e.y)
+                    composition.selectionEnd = Vec2(composition.caret.row, composition.caret.col)
+                    repaint()
+                }
             }
         })
     }
