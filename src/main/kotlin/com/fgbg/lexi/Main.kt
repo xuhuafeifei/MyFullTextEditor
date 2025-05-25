@@ -1,28 +1,26 @@
 import java.awt.*
 import java.awt.event.InputMethodEvent
-import java.awt.event.InputMethodListener
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.font.TextHitInfo
 import java.awt.im.InputMethodRequests
 import java.text.AttributedCharacterIterator
 import java.text.AttributedString
+import java.text.CharacterIterator
 import javax.swing.JComponent
 import javax.swing.Timer
-import javax.swing.text.AttributeSet
-import javax.swing.text.JTextComponent
 
-data class vec2(val x: Int, val y: Int)
-data class vec4(val x: Int, val y: Int, val w: Int, val h: Int)
+data class Vec2(val x: Int, val y: Int)
+data class Vec4(val x: Int, val y: Int, val w: Int, val h: Int)
 
-fun vec4(x: Int, y: Int, size: vec2): vec4 = vec4(x, y, size.x, size.y)
+fun vec4(x: Int, y: Int, size: Vec2): Vec4 = Vec4(x, y, size.x, size.y)
 fun Char.isASCII(): Boolean = this <= '\u007F'
 
 interface Glyph {
     /**
      * 宽, 高
      */
-    var size: vec2
+    var size: Vec2
     fun insert(glyph: Glyph, index: Int = 0): Unit = throw UnsupportedOperationException()
     fun remove(index: Int): Unit = throw UnsupportedOperationException()
     fun draw(g: java.awt.Graphics)
@@ -30,7 +28,7 @@ interface Glyph {
     /**
      * 计算图元布局信息, 并设置size属性, 同时返回字图元的位置信息
      */
-    fun layout(x: Int, y: Int, g: java.awt.Graphics): vec4
+    fun layout(x: Int, y: Int, g: java.awt.Graphics): Vec4
     /**
      * 必须在layout计算完排版后才能够调用
      */
@@ -39,16 +37,16 @@ interface Glyph {
      * 必须在layout计算完排版后才能够调用
      */
     fun getWidth(): Int
-    fun getPosition(): vec2 = vec2(-1, -1)
+    fun getPosition(): Vec2 = Vec2(-1, -1)
 }
 
 class Character(private val char: Char) : Glyph {
-    private val font = java.awt.Font("Monospaced", java.awt.Font.PLAIN, 16)
+    private val font = Font("Monospaced", java.awt.Font.PLAIN, 16)
     private var x: Int = 0
     private var y: Int = 0
     private var offset: Int = 2
 
-    override var size: vec2 = vec2(-1, -1)
+    override var size: Vec2 = Vec2(-1, -1)
 
     override fun draw(g: java.awt.Graphics) {
         g.font = font
@@ -70,12 +68,12 @@ class Character(private val char: Char) : Glyph {
         return this.size.y
     }
 
-    override fun getPosition(): vec2 = vec2(x, y)
+    override fun getPosition(): Vec2 = Vec2(x, y)
 
-    override fun layout(x: Int, y: Int, g: java.awt.Graphics): vec4 {
+    override fun layout(x: Int, y: Int, g: java.awt.Graphics): Vec4 {
         this.x = x
         this.y = y
-        this.size = vec2(g.fontMetrics.charWidth(char), g.fontMetrics.height)
+        this.size = Vec2(g.fontMetrics.charWidth(char), g.fontMetrics.height)
         return vec4(x, y, size)
     }
 
@@ -83,13 +81,13 @@ class Character(private val char: Char) : Glyph {
 }
 
 class DefaultGlyph : Glyph {
-    override var size: vec2
+    override var size: Vec2
         get() = TODO("Not yet implemented")
         set(value) {}
 
     override fun draw(g: Graphics): Unit = Unit
     override fun intersects(p: Point): Boolean = false
-    override fun layout(x: Int, y: Int, g: Graphics): vec4 = vec4(0, 0, 0, 0)
+    override fun layout(x: Int, y: Int, g: Graphics): Vec4 = Vec4(0, 0, 0, 0)
     override fun getHeight(): Int {
         TODO("Not yet implemented")
     }
@@ -103,9 +101,9 @@ class Row : Glyph {
     private val children = mutableListOf<Glyph>()
     private var x: Int = 0
     private var y: Int = 0
-    override var size: vec2 = vec2(-1, -1)
+    override var size: Vec2 = Vec2(-1, -1)
 
-    override fun layout(x: Int, y: Int, g: Graphics): vec4 {
+    override fun layout(x: Int, y: Int, g: Graphics): Vec4 {
         // 遍历所有的child, 计算它们的位置信息
         var currentX = x
         var maxH = 16
@@ -115,7 +113,7 @@ class Row : Glyph {
             maxH = maxOf(glyph.layout(currentX, y, g).h, maxH)
             currentX += glyph.getWidth()
         }
-        this.size = vec2(currentX - x, maxH)
+        this.size = Vec2(currentX - x, maxH)
         return vec4(x, y, size)
     }
 
@@ -143,7 +141,7 @@ class Row : Glyph {
         children.addAll(glyphs)
     }
 
-    override fun getPosition(): vec2 = vec2(x, y)
+    override fun getPosition(): Vec2 = Vec2(x, y)
 }
 
 // Composition.kt
@@ -348,53 +346,52 @@ class Editor : JComponent() {
         })
     }
 
+    /**
+     * 必须重写, 否则无法处理中文输入, 但实际上并不需要实现任何具体功能. 目前其底层原理尚未可知, 唯一能够确定的是
+     * </br>
+     * 不重写当前方法, {@link #processInputMethodEvent(InputMethodEvent)} 不会被调用.
+     */
     override fun getInputMethodRequests(): InputMethodRequests {
         return object: InputMethodRequests {
-            override fun getTextLocation(offset: TextHitInfo?): Rectangle {
-                TODO("Not yet implemented")
-                println("getTextLocation: $offset")
-            }
-
-            override fun getLocationOffset(x: Int, y: Int): TextHitInfo? {
-                println("getLocationOffset: $x, $y")
-                return null
-            }
-
-            override fun getInsertPositionOffset(): Int {
-                println("getInsertPositionOffset")
-                return 0 // 插入点在光标位置
-            }
-
-            override fun getCommittedText(
-                beginIndex: Int,
-                endIndex: Int,
-                attributes: Array<out AttributedCharacterIterator.Attribute>?
-            ): AttributedCharacterIterator {
-                TODO("Not yet implemented")
-                println("getCommittedText: $beginIndex, $endIndex, $attributes")
-            }
-
-            override fun getCommittedTextLength(): Int {
-                println("getCommittedTextLength")
-                return 0
-            }
-
-            override fun cancelLatestCommittedText(attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator? {
-                println("cancelLatestCommittedText")
-                TODO("Not yet implemented")
-            }
-
-            override fun getSelectedText(attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator? {
-                println("getSelectedText")
-                TODO("Not yet implemented")
-            }
+            override fun getTextLocation(offset: TextHitInfo?): Rectangle = Rectangle(0, 0, 0, 0)
+            override fun getLocationOffset(x: Int, y: Int): TextHitInfo? = null
+            override fun getInsertPositionOffset(): Int = 0
+            override fun getCommittedText(beginIndex: Int, endIndex: Int, attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator = AttributedString("").getIterator()
+            override fun getCommittedTextLength(): Int = 0
+            override fun cancelLatestCommittedText(attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator? = null
+            override fun getSelectedText(attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator? = null
         }
     }
 
     override fun processInputMethodEvent(e: InputMethodEvent?) {
-        println("abab")
         super.processInputMethodEvent(e)
-        println("processInputMethodEvent: $e")
+        if (e == null) return
+
+        val text = e.text ?: return
+
+        // 输入法提交字符个数
+        val committedCount = e.committedCharacterCount
+
+        var ch = text.first()
+        var index = 0
+        while (ch != CharacterIterator.DONE) {
+            ch = text.next()
+            index++
+        }
+
+        text.first()
+        val confirmedText = StringBuilder()
+        for (i in 0 until committedCount) {
+            confirmedText.append(text.current())
+            text.next()
+        }
+
+        if (confirmedText.isNotEmpty()) {
+            for (c in confirmedText) {
+                composition.insert(Character(c))
+            }
+            repaint()
+        }
     }
 
     override fun paintComponent(g: Graphics) {
