@@ -2,6 +2,7 @@ import java.awt.*
 import java.awt.event.InputMethodEvent
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.awt.event.MouseEvent
 import java.awt.font.TextHitInfo
 import java.awt.im.InputMethodRequests
 import java.text.AttributedCharacterIterator
@@ -9,6 +10,7 @@ import java.text.AttributedString
 import java.text.CharacterIterator
 import javax.swing.JComponent
 import javax.swing.Timer
+import javax.swing.UIManager
 
 data class Vec2(val x: Int, val y: Int)
 data class Vec4(val x: Int, val y: Int, val w: Int, val h: Int)
@@ -17,6 +19,8 @@ fun vec4(x: Int, y: Int, size: Vec2): Vec4 = Vec4(x, y, size.x, size.y)
 fun Char.isASCII(): Boolean = this <= '\u007F'
 
 interface Glyph {
+    var x: Int
+    var y: Int
     /**
      * 宽, 高
      */
@@ -24,7 +28,9 @@ interface Glyph {
     fun insert(glyph: Glyph, index: Int = 0): Unit = throw UnsupportedOperationException()
     fun remove(index: Int): Unit = throw UnsupportedOperationException()
     fun draw(g: java.awt.Graphics)
-    fun intersects(p: java.awt.Point): Boolean
+    fun inRow(p: Vec2): Boolean = p.y >= y && p.y <= y + size.y
+    fun inCol(p: Vec2): Boolean = p.x >= x && p.x <= x + size.x
+    fun intersects(p: Vec2): Boolean = inRow(p) && inCol(p)
     /**
      * 计算图元布局信息, 并设置size属性, 同时返回字图元的位置信息
      */
@@ -41,10 +47,12 @@ interface Glyph {
 }
 
 class Character(private val char: Char) : Glyph {
-    private val font = Font("Monospaced", java.awt.Font.PLAIN, 16)
-    private var x: Int = 0
-    private var y: Int = 0
+    // private val font = UIManager.getFont("Label.font")
+    private val font = Font("Smiley Sans", Font.PLAIN, 16)
     private var offset: Int = 2
+
+    override var x: Int = 0
+    override var y: Int = 0
 
     override var size: Vec2 = Vec2(-1, -1)
 
@@ -54,7 +62,6 @@ class Character(private val char: Char) : Glyph {
         g.drawString(char.toString(), x, y + g.fontMetrics.ascent)
     }
 
-    override fun intersects(p: java.awt.Point): Boolean = false
 
     override fun getWidth(): Int {
 //        if (char == 'i' || char == 'l' || char == 'j') {
@@ -71,9 +78,14 @@ class Character(private val char: Char) : Glyph {
     override fun getPosition(): Vec2 = Vec2(x, y)
 
     override fun layout(x: Int, y: Int, g: java.awt.Graphics): Vec4 {
+        val oldFont = g.font
         this.x = x
         this.y = y
+
+        g.font = font
         this.size = Vec2(g.fontMetrics.charWidth(char), g.fontMetrics.height)
+        g.font = oldFont
+
         return vec4(x, y, size)
     }
 
@@ -81,12 +93,17 @@ class Character(private val char: Char) : Glyph {
 }
 
 class DefaultGlyph : Glyph {
+    override var x: Int
+        get() = TODO("Not yet implemented")
+        set(value) {}
+    override var y: Int
+        get() = TODO("Not yet implemented")
+        set(value) {}
     override var size: Vec2
         get() = TODO("Not yet implemented")
         set(value) {}
 
     override fun draw(g: Graphics): Unit = Unit
-    override fun intersects(p: Point): Boolean = false
     override fun layout(x: Int, y: Int, g: Graphics): Vec4 = Vec4(0, 0, 0, 0)
     override fun getHeight(): Int {
         TODO("Not yet implemented")
@@ -99,8 +116,8 @@ class DefaultGlyph : Glyph {
 
 class Row : Glyph {
     private val children = mutableListOf<Glyph>()
-    private var x: Int = 0
-    private var y: Int = 0
+    override var x: Int = 0
+    override var y: Int = 0
     override var size: Vec2 = Vec2(-1, -1)
 
     override fun layout(x: Int, y: Int, g: Graphics): Vec4 {
@@ -135,7 +152,6 @@ class Row : Glyph {
             glyph.draw(g)
         }
     }
-    override fun intersects(p: java.awt.Point): Boolean = false
     fun getChildren(): MutableList<Glyph> = children
     fun addAll(glyphs: List<Glyph>): Unit {
         children.addAll(glyphs)
@@ -264,17 +280,6 @@ class Composition(glyph: Glyph) : Glyph by glyph {
         }
     }
 
-    fun getCaretX(g: java.awt.Graphics, caret: Caret, baseX: Int): Int {
-        val row = rows[caret.row]
-        var x = baseX
-
-        for ((i, glyph) in row.getChildren().withIndex()) {
-            if (i == caret.col) break
-            x += glyph.getWidth()
-        }
-        return x
-    }
-
     fun getRows(): List<Row> = rows
 
     private fun wrapLine() {
@@ -284,10 +289,40 @@ class Composition(glyph: Glyph) : Glyph by glyph {
     fun compose() {
         compositor.compose()
     }
+
+    /**
+     * 移动光标
+     */
+    fun moveCaret(x: Int, y: Int) {
+        if (rows.isEmpty()) {
+            return
+        }
+        // n + m 的时间复杂度, 不是n * m
+        // 首先遍历n行, 找到光标所在行后, 遍历该行的子图元, 找到光标所在位置后, 移动光标
+        for ((rowIdx, row) in rows.withIndex()) {
+            val p = Vec2(x, y)
+            if (row.inRow(p)) {
+                caret.row = rowIdx
+                for ((colIdx, child) in row.getChildren().withIndex()) {
+                    caret.col = colIdx + 1
+                    if (child.inCol(p)) {
+                        return
+                    }
+                }
+                // 光标在最后一列
+                return
+            }
+        }
+        // 光标在最后一行的最后一列
+        caret.row =  rows.size - 1
+        caret.col =  rows[caret.row].getChildren().size
+    }
 }
 
 data class Caret(
+    // row本身就是索引下标
     var row: Int = 0,
+    // col-1才是索引下标
     var col: Int = 0,
     var x: Int = 0,
     var y: Int = 0,
@@ -342,6 +377,15 @@ class Editor : JComponent() {
                     repaint()
                     e.consume() // 吞掉事件
                 }
+            }
+        })
+
+        addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent?) {
+                super.mouseClicked(e)
+                e?: return
+                composition.moveCaret(e.x, e.y)
+                repaint()
             }
         })
     }
@@ -403,10 +447,11 @@ class Editor : JComponent() {
 
 fun main() {
     javax.swing.SwingUtilities.invokeLater {
-        val frame = javax.swing.JFrame("Glyph Editor With Composition")
-        frame.defaultCloseOperation = javax.swing.JFrame.EXIT_ON_CLOSE
-        frame.contentPane.add(Editor())
-        frame.setSize(600, 400)
-        frame.isVisible = true
+        val frame = javax.swing.JFrame("飞哥不鸽文本编辑器").apply {
+            defaultCloseOperation = javax.swing.JFrame.EXIT_ON_CLOSE
+            contentPane.add(Editor())
+            setSize(600, 400)
+            isVisible = true
+        }
     }
 }
