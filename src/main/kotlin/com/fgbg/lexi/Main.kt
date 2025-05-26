@@ -72,6 +72,11 @@ class Character(private val char: Char) : Glyph {
         return this.size.x + offset
     }
 
+    override fun inCol(p: Vec2): Boolean {
+        val halfW = getWidth() / 2
+        return p.x > x + halfW && p.x <= x + getWidth() + halfW
+    }
+
     override fun getHeight(): Int {
         return this.size.y
     }
@@ -386,6 +391,7 @@ class Composition(glyph: Glyph) : Glyph by glyph {
                     }
                 }
                 // 光标在最后一列
+                caret.col = row.getChildren().size
                 return
             }
         }
@@ -463,6 +469,7 @@ class Editor : JComponent() {
                     isDragging = true
                     composition.clearSelection()
                     composition.moveCaret(e.x, e.y)
+
                     composition.selectionStart = Vec2(composition.caret.row, composition.caret.col)
                     repaint()
                 }
