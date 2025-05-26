@@ -25,6 +25,7 @@ interface Glyph {
     fun insert(glyph: Glyph, index: Int = 0): Unit = throw UnsupportedOperationException()
     fun remove(index: Int): Unit = throw UnsupportedOperationException()
     fun draw(g: java.awt.Graphics)
+    fun drawSelection(g: java.awt.Graphics, x: Int, y: Int, w: Int, h: Int): Unit = Unit
     fun inRow(p: Vec2): Boolean = p.y >= y && p.y <= y + size.y
     fun inCol(p: Vec2): Boolean = p.x >= x && p.x <= x + size.x
     fun intersects(p: Vec2): Boolean = inRow(p) && inCol(p)
@@ -59,6 +60,9 @@ class Character(private val char: Char) : Glyph {
         g.drawString(char.toString(), x, y + g.fontMetrics.ascent)
     }
 
+    override fun drawSelection(g: java.awt.Graphics, x: Int, y: Int, w: Int, h: Int) {
+        g.fillRect(x, y, w, h)
+    }
 
     override fun getWidth(): Int {
 //        if (char == 'i' || char == 'l' || char == 'j') {
@@ -149,7 +153,18 @@ class Row : Glyph {
             glyph.draw(g)
         }
     }
+
+    fun drawSelection(g: java.awt.Graphics, from: Int, to: Int) {
+        val len = children.size
+        if (from > len || from < 0 || to > len || to < 0) return
+        for (i in from..<to) {
+            val glyph = children[i]
+            glyph.drawSelection(g, glyph.getPosition().x, y, glyph.getWidth(), getHeight())
+        }
+    }
+
     fun getChildren(): MutableList<Glyph> = children
+
     fun addAll(glyphs: List<Glyph>): Unit {
         children.addAll(glyphs)
     }
@@ -320,37 +335,25 @@ class Composition(glyph: Glyph) : Glyph by glyph {
         }
     }
 
-    private fun drawSelection(g: Graphics) {
+    fun drawSelection(g: Graphics) {
         val (startRow, startCol) = selectionStart
         val (endRow, endCol) = selectionEnd
 
         val normalizedStartRow = minOf(startRow, endRow)
         val normalizedEndRow = maxOf(startRow, endRow)
-        val normalizedStartCol = if (startRow < endRow) startCol else endCol
-        val normalizedEndCol = if (startRow > endRow) startCol else endCol
+        val normalizedStartCol = minOf(startCol, endCol)
+        val normalizedEndCol = maxOf(startCol, endCol)
 
+        val oldColor = g.color
         g.color = Color(0, 120, 215, 100) // 半透明蓝色背景
 
-        for (row in normalizedStartRow..normalizedEndRow) {
-            if (row !in rows.indices) continue
-
-            val rowStart = if (row == normalizedStartRow) normalizedStartCol else 0
-            val rowEnd = if (row == normalizedEndRow) normalizedEndCol else rows[row].getChildren().size
-
-            if (rowStart >= rowEnd) continue
-
-            val startGlyph = rows[row].indexAt(rowStart) ?: continue
-            val endGlyph = rows[row].indexAt(rowEnd - 1) ?: continue
-
-            val x1 = startGlyph.getPosition().x
-            val x2 = endGlyph.getPosition().x + endGlyph.getWidth()
-            val y = rows[row].getPosition().y
-            val height = rows[row].getHeight()
-
-            g.fillRect(x1, y, x2 - x1, height)
+        for (rowIdx in normalizedStartRow..normalizedEndRow) {
+            if (rowIdx == normalizedStartRow && rowIdx == normalizedEndRow) {
+                rows[rowIdx].drawSelection(g, normalizedStartCol, normalizedEndCol)
+            }
         }
 
-        g.color = Color.BLACK // 恢复默认颜色
+        g.color = oldColor // 恢复默认颜色
     }
 
     fun getRows(): List<Row> = rows
@@ -454,15 +457,6 @@ class Editor : JComponent() {
             }
         })
 
-        addMouseListener(object : java.awt.event.MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent?) {
-                super.mouseClicked(e)
-                e?: return
-                composition.moveCaret(e.x, e.y)
-                repaint()
-            }
-        })
-
         addMouseListener(object : MouseAdapter() {
             override fun mousePressed(e: MouseEvent) {
                 if (e.button == MouseEvent.BUTTON1) { // 左键按下
@@ -476,9 +470,17 @@ class Editor : JComponent() {
 
             override fun mouseReleased(e: MouseEvent) {
                 if (e.button == MouseEvent.BUTTON1) {
-                    isDragging = false
                     repaint()
                 }
+            }
+
+            override fun mouseClicked(e: MouseEvent?) {
+                isDragging = false
+                composition.clearSelection()
+                super.mouseClicked(e)
+                e?: return
+                composition.moveCaret(e.x, e.y)
+                repaint()
             }
         })
 
