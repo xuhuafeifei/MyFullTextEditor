@@ -28,6 +28,7 @@ interface Glyph {
     fun drawSelection(g: java.awt.Graphics, x: Int, y: Int, w: Int, h: Int): Unit = Unit
     fun inRow(p: Vec2): Boolean = p.y >= y && p.y <= y + size.y
     fun inCol(p: Vec2): Boolean = p.x >= x && p.x <= x + size.x
+    fun isBefore(p: Vec2): Boolean = p.x < x
     fun intersects(p: Vec2): Boolean = inRow(p) && inCol(p)
     /**
      * 计算图元布局信息, 并设置size属性, 同时返回字图元的位置信息
@@ -72,9 +73,16 @@ class Character(private val char: Char) : Glyph {
         return this.size.x + offset
     }
 
+    /**
+     * 字符采取半宽设计.换句话说，光标点击在字符前半部分，则视为左移，点击在字符后半部分，则视为右移。
+     */
     override fun inCol(p: Vec2): Boolean {
         val halfW = getWidth() / 2
         return p.x > x + halfW && p.x <= x + getWidth() + halfW
+    }
+    override fun isBefore(p: Vec2): Boolean {
+        val halfW = getWidth() / 2
+        return p.x < x + halfW
     }
 
     override fun getHeight(): Int {
@@ -385,6 +393,11 @@ class Composition(glyph: Glyph) : Glyph by glyph {
             if (row.inRow(p)) {
                 caret.row = rowIdx
                 for ((colIdx, child) in row.getChildren().withIndex()) {
+                    // 因为半字符的相交设定, 开头首个字符需要进行特判
+                    if (colIdx == 0 && child.isBefore(p)) {
+                        caret.col = 0
+                        return
+                    }
                     caret.col = colIdx + 1
                     if (child.inCol(p)) {
                         return
