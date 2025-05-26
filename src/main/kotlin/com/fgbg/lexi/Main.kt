@@ -5,10 +5,9 @@ import java.awt.im.InputMethodRequests
 import java.text.AttributedCharacterIterator
 import java.text.AttributedString
 import java.text.CharacterIterator
-import javax.swing.JComponent
-import javax.swing.Timer
-import javax.swing.UIManager
+import javax.swing.*
 
+val maxWidth: Int = 500
 data class Vec2(val x: Int, val y: Int)
 data class Vec4(val x: Int, val y: Int, val w: Int, val h: Int)
 
@@ -45,34 +44,20 @@ interface Glyph {
     fun getPosition(): Vec2 = Vec2(-1, -1)
 }
 
-class Character(private val char: Char) : Glyph {
+class Character(private val char: Char, private val fontSize: Int = 16, private val isBold: Boolean = false) : Glyph {
     // private val font = UIManager.getFont("Label.font")
-    private val font = Font("Smiley Sans", Font.PLAIN, 16)
+    private val font = Font("Smiley Sans", if (isBold) Font.BOLD else Font.PLAIN, fontSize)
     private var offset: Int = 2
-
     override var x: Int = 0
     override var y: Int = 0
-
     override var size: Vec2 = Vec2(-1, -1)
-
     override fun draw(g: java.awt.Graphics) {
         g.font = font
         // drawString的y坐标是相对于基线的, 所以需要加上ascent
         g.drawString(char.toString(), x, y + g.fontMetrics.ascent)
     }
-
-    override fun drawSelection(g: java.awt.Graphics, x: Int, y: Int, w: Int, h: Int) {
-        g.fillRect(x, y, w, h)
-    }
-
-    override fun getWidth(): Int {
-//        if (char == 'i' || char == 'l' || char == 'j') {
-//            return this.size.x + offset + 1
-//        }
-//        return this.size.x + offset
-        return this.size.x + offset
-    }
-
+    override fun drawSelection(g: java.awt.Graphics, x: Int, y: Int, w: Int, h: Int): Unit = g.fillRect(x, y, w, h)
+    override fun getWidth(): Int = this.size.x + offset
     /**
      * 字符采取半宽设计.换句话说，光标点击在字符前半部分，则视为左移，点击在字符后半部分，则视为右移。
      */
@@ -84,13 +69,8 @@ class Character(private val char: Char) : Glyph {
         val halfW = getWidth() / 2
         return p.x < x + halfW
     }
-
-    override fun getHeight(): Int {
-        return this.size.y
-    }
-
+    override fun getHeight(): Int = this.size.y
     override fun getPosition(): Vec2 = Vec2(x, y)
-
     override fun layout(x: Int, y: Int, g: java.awt.Graphics): Vec4 {
         val oldFont = g.font
         this.x = x
@@ -102,7 +82,6 @@ class Character(private val char: Char) : Glyph {
 
         return vec4(x, y, size)
     }
-
     fun getChar(): Char = char
 }
 
@@ -128,24 +107,45 @@ class DefaultGlyph : Glyph {
     }
 }
 
-class Row : Glyph {
+class Row(private val isCentered: Boolean = false) : Glyph {
     private val children = mutableListOf<Glyph>()
     override var x: Int = 0
     override var y: Int = 0
     override var size: Vec2 = Vec2(-1, -1)
 
     override fun layout(x: Int, y: Int, g: Graphics): Vec4 {
-        // 遍历所有的child, 计算它们的位置信息
-        var currentX = x
-        var maxH = 16
         this.x = x
         this.y = y
-        for (glyph in children) {
-            maxH = maxOf(glyph.layout(currentX, y, g).h, maxH)
-            currentX += glyph.getWidth()
+
+        // 计算总宽度和最大高度
+        var totalWidth = 0
+        var maxH = 16
+        children.forEach { glyph ->
+            val bounds = glyph.layout(0, 0, g) // 临时测量
+            totalWidth += glyph.getWidth()
+            maxH = maxOf(maxH, bounds.h)
         }
-        this.size = Vec2(currentX - x, maxH)
-        return vec4(x, y, size)
+
+        // 居中布局处理
+        if (isCentered && totalWidth < maxWidth) {
+            val startX = x + (maxWidth - totalWidth) / 2
+            var currentX = startX
+            children.forEach { glyph ->
+                glyph.layout(currentX, y, g)
+                currentX += glyph.getWidth()
+            }
+            this.size = Vec2(maxWidth, maxH) // 居中行占用全部宽度
+        } else {
+            // 默认左对齐布局
+            var currentX = x
+            children.forEach { glyph ->
+                glyph.layout(currentX, y, g)
+                currentX += glyph.getWidth()
+            }
+            this.size = Vec2(totalWidth, maxH)
+        }
+
+        return vec4(this.x, this.y, this.size)
     }
 
     fun indexAt(index: Int): Glyph? {
@@ -166,7 +166,6 @@ class Row : Glyph {
             glyph.draw(g)
         }
     }
-
     fun drawSelection(g: java.awt.Graphics, from: Int, to: Int) {
         val len = children.size
         if (from > len || from < 0 || to > len || to < 0) return
@@ -175,17 +174,20 @@ class Row : Glyph {
             glyph.drawSelection(g, glyph.getPosition().x, y, glyph.getWidth(), getHeight())
         }
     }
-
     fun getChildren(): MutableList<Glyph> = children
-
     fun addAll(glyphs: List<Glyph>): Unit {
         children.addAll(glyphs)
     }
-
     override fun getPosition(): Vec2 = Vec2(x, y)
 }
 
 // Composition.kt
+/**
+ * composition这个类没设计好, 他和Compositor的职责关系没有做好区分. 这导致Composition没发支持更为复杂的编排布局
+ * 只能支持Row布局. 并且Caret的设计也不合理, Caret的坐标设计应该废弃row, col这样强依赖于Row的设计.
+ * 应该设计一个更为通用的Caret, 它应该只负责跟踪光标的位置, 而不应该依赖于Row的布局.
+ * 但都写了这么多代码了, 就先这样吧.
+ */
 class Composition(glyph: Glyph) : Glyph by glyph {
     private val rows = mutableListOf<Row>()
     private val compositor: Compositor = SimpleCompositor()
@@ -194,7 +196,7 @@ class Composition(glyph: Glyph) : Glyph by glyph {
         0, 0, 0, 0, 0,
         java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
             .defaultScreenDevice.defaultConfiguration.createCompatibleImage(1, 1).graphics,
-        500
+        maxWidth
     )
 
     // 添加选中状态
@@ -235,15 +237,15 @@ class Composition(glyph: Glyph) : Glyph by glyph {
     }
 
     init {
-        rows.add(Row())
+        rows.add(Row(true))
     }
 
-    fun insert(glyph: Glyph) {
+    fun insert(glyph: Glyph, isCentered: Boolean) {
         val row = rows[caret.row]
         row.insert(glyph, caret.col)
         caret.col++
         if (row.getWidth() > caret.maxWidth) {
-            wrapLine()
+            wrapLine(isCentered)
         }
     }
 
@@ -275,7 +277,6 @@ class Composition(glyph: Glyph) : Glyph by glyph {
             caret.row++
             caret.col = 0
         }
-
     }
     fun moveUp() {
         if (caret.row > 0) {
@@ -293,9 +294,9 @@ class Composition(glyph: Glyph) : Glyph by glyph {
         }
     }
 
-    fun newLine() {
+    fun newLine(isCentered: Boolean) {
         val current = rows[caret.row]
-        val newRow = Row()
+        val newRow = Row(isCentered)
         current.getChildren().subList(caret.col, current.getChildren().size).toList().apply {
             if (this.isNotEmpty()) newRow.addAll(this)
         }
@@ -371,8 +372,8 @@ class Composition(glyph: Glyph) : Glyph by glyph {
 
     fun getRows(): List<Row> = rows
 
-    private fun wrapLine() {
-        newLine()
+    private fun wrapLine(isCentered: Boolean) {
+        newLine(isCentered)
     }
 
     fun compose() {
@@ -435,137 +436,167 @@ class SimpleCompositor : Compositor {
 }
 
 
-class Editor : JComponent() {
-    private val composition = Composition(DefaultGlyph())
-    private var isDragging = false
-
+class Editor : JPanel(BorderLayout()) {
+    private val editorComponent = EditorComponent()
+    private val fontSizeBox = JComboBox(arrayOf(12, 14, 16, 18, 20, 24, 32, 48, 64)).apply {
+        isFocusable = false
+    }
+    private val boldToggle = JToggleButton("Bold").apply {
+        isFocusable = false
+    }
+    private val centerToggle = JToggleButton("Center").apply {
+        isSelected = true
+        isFocusable = false
+    }
     init {
+        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT))
+        toolbar.add(JLabel("Font Size:"))
+        toolbar.add(fontSizeBox)
+        toolbar.add(boldToggle)
+        toolbar.add(centerToggle)
+
+        // 确保父容器和子组件都可获取焦点
         isFocusable = true
-        background = Color.WHITE
+        editorComponent.isFocusable = true
 
-        // enable InputMethodEvent for on-the-spot pre-editing
-        enableEvents(AWTEvent.KEY_EVENT_MASK or AWTEvent.INPUT_METHOD_EVENT_MASK)
-        enableInputMethods(true)
+        requestFocusInWindow()
+        setFocusable(true)
+        // 显式请求焦点（放在构造函数的最后）
+        addHierarchyListener {
+            editorComponent.requestFocusInWindow()
+        }
 
-        // 定时刷新（可选）
-        Timer(500) { repaint() }.start()
+        fontSizeBox.selectedItem = 14 // 默认字体大小
 
-        addKeyListener(object : KeyAdapter() {
-            override fun keyPressed(e: KeyEvent) {
-                when (e.keyCode) {
-                    KeyEvent.VK_LEFT -> composition.moveLeft()
-                    KeyEvent.VK_RIGHT -> composition.moveRight()
-                    KeyEvent.VK_UP -> composition.moveUp()
-                    KeyEvent.VK_DOWN -> composition.moveDown()
-                    KeyEvent.VK_BACK_SPACE -> composition.delete()
-                    KeyEvent.VK_ENTER -> composition.newLine()
-                }
-                repaint()
-            }
+        add(toolbar, BorderLayout.NORTH)
+        add(editorComponent, BorderLayout.CENTER)
 
-            override fun keyTyped(e: KeyEvent) {
-                val ch = e.keyChar
-                if (ch == '\n') return
+        editorComponent.requestFocusInWindow()
+    }
 
-                // 只处理 ASCII 字符，中文交给输入法处理
-                if (ch.isASCII() && !ch.isISOControl()) {
-                    composition.insert(Character(ch))
+    inner class EditorComponent : JComponent() {
+        private val composition = Composition(DefaultGlyph())
+        private var isDragging = false
+
+        // 当前状态设置
+        private val currentFontSize: Int
+            get() = fontSizeBox.selectedItem as Int
+        private val isBold: Boolean
+            get() = boldToggle.isSelected
+        private val isCentered: Boolean
+            get() = centerToggle.isSelected
+
+        init {
+            background = Color.WHITE
+
+            requestFocusInWindow()
+            setFocusable(true)
+            enableEvents(AWTEvent.KEY_EVENT_MASK or AWTEvent.INPUT_METHOD_EVENT_MASK)
+            enableInputMethods(true)
+
+            Timer(500) { repaint() }.start()
+
+            addKeyListener(object : KeyAdapter() {
+                override fun keyPressed(e: KeyEvent) {
+                    when (e.keyCode) {
+                        KeyEvent.VK_LEFT -> composition.moveLeft()
+                        KeyEvent.VK_RIGHT -> composition.moveRight()
+                        KeyEvent.VK_UP -> composition.moveUp()
+                        KeyEvent.VK_DOWN -> composition.moveDown()
+                        KeyEvent.VK_BACK_SPACE -> composition.delete()
+                        KeyEvent.VK_ENTER -> composition.newLine(isCentered)
+                    }
                     repaint()
-                    e.consume() // 吞掉事件
                 }
-            }
-        })
 
-        addMouseListener(object : MouseAdapter() {
-            override fun mousePressed(e: MouseEvent) {
-                if (e.button == MouseEvent.BUTTON1) { // 左键按下
-                    isDragging = true
+                override fun keyTyped(e: KeyEvent) {
+                    val ch = e.keyChar
+                    if (ch == '\n') return
+
+                    if (ch.isASCII() && !ch.isISOControl()) {
+                        composition.insert(Character(ch, currentFontSize, isBold), isCentered)
+                        repaint()
+                        e.consume()
+                    }
+                }
+            })
+
+            addMouseListener(object : MouseAdapter() {
+                override fun mousePressed(e: MouseEvent) {
+                    if (e.button == MouseEvent.BUTTON1) {
+                        requestFocusInWindow()
+                        isDragging = true
+                        composition.clearSelection()
+                        composition.moveCaret(e.x, e.y)
+                        composition.selectionStart = Vec2(composition.caret.row, composition.caret.col)
+                        repaint()
+                    }
+                }
+
+                override fun mouseReleased(e: MouseEvent) {
+                    if (e.button == MouseEvent.BUTTON1) repaint()
+                }
+
+                override fun mouseClicked(e: MouseEvent?) {
+                    isDragging = false
                     composition.clearSelection()
+                    super.mouseClicked(e)
+                    e ?: return
                     composition.moveCaret(e.x, e.y)
-
-                    composition.selectionStart = Vec2(composition.caret.row, composition.caret.col)
                     repaint()
+                }
+            })
+
+            addMouseMotionListener(object : MouseMotionAdapter() {
+                override fun mouseDragged(e: MouseEvent) {
+                    if (isDragging) {
+                        composition.moveCaret(e.x, e.y)
+                        composition.selectionEnd = Vec2(composition.caret.row, composition.caret.col)
+                        repaint()
+                    }
+                }
+            })
+        }
+
+        override fun getInputMethodRequests(): InputMethodRequests {
+            return object : InputMethodRequests {
+                override fun getTextLocation(offset: TextHitInfo?) = Rectangle(0, 0, 0, 0)
+                override fun getLocationOffset(x: Int, y: Int): TextHitInfo? = null
+                override fun getInsertPositionOffset() = 0
+                override fun getCommittedText(beginIndex: Int, endIndex: Int, attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator =
+                    AttributedString("").iterator
+                override fun getCommittedTextLength() = 0
+                override fun cancelLatestCommittedText(attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator? = null
+                override fun getSelectedText(attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator? = null
+            }
+        }
+
+        override fun processInputMethodEvent(e: InputMethodEvent?) {
+            super.processInputMethodEvent(e)
+            if (e == null) return
+            val text = e.text ?: return
+            val committedCount = e.committedCharacterCount
+
+            val confirmedText = buildString {
+                text.first()
+                for (i in 0 until committedCount) {
+                    append(text.current())
+                    text.next()
                 }
             }
 
-            override fun mouseReleased(e: MouseEvent) {
-                if (e.button == MouseEvent.BUTTON1) {
-                    repaint()
+            if (confirmedText.isNotEmpty()) {
+                for (c in confirmedText) {
+                    composition.insert(Character(c, currentFontSize, isBold), isCentered)
                 }
-            }
-
-            override fun mouseClicked(e: MouseEvent?) {
-                isDragging = false
-                composition.clearSelection()
-                super.mouseClicked(e)
-                e?: return
-                composition.moveCaret(e.x, e.y)
                 repaint()
             }
-        })
-
-        addMouseMotionListener(object : MouseMotionAdapter() {
-            override fun mouseDragged(e: MouseEvent) {
-                if (isDragging) {
-                    composition.moveCaret(e.x, e.y)
-                    composition.selectionEnd = Vec2(composition.caret.row, composition.caret.col)
-                    repaint()
-                }
-            }
-        })
-    }
-
-    /**
-     * 必须重写, 否则无法处理中文输入, 但实际上并不需要实现任何具体功能. 目前其底层原理尚未可知, 唯一能够确定的是
-     * </br>
-     * 不重写当前方法, {@link #processInputMethodEvent(InputMethodEvent)} 不会被调用.
-     */
-    override fun getInputMethodRequests(): InputMethodRequests {
-        return object: InputMethodRequests {
-            override fun getTextLocation(offset: TextHitInfo?): Rectangle = Rectangle(0, 0, 0, 0)
-            override fun getLocationOffset(x: Int, y: Int): TextHitInfo? = null
-            override fun getInsertPositionOffset(): Int = 0
-            override fun getCommittedText(beginIndex: Int, endIndex: Int, attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator = AttributedString("").getIterator()
-            override fun getCommittedTextLength(): Int = 0
-            override fun cancelLatestCommittedText(attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator? = null
-            override fun getSelectedText(attributes: Array<out AttributedCharacterIterator.Attribute>?): AttributedCharacterIterator? = null
-        }
-    }
-
-    override fun processInputMethodEvent(e: InputMethodEvent?) {
-        super.processInputMethodEvent(e)
-        if (e == null) return
-
-        val text = e.text ?: return
-
-        // 输入法提交字符个数
-        val committedCount = e.committedCharacterCount
-
-        var ch = text.first()
-        var index = 0
-        while (ch != CharacterIterator.DONE) {
-            ch = text.next()
-            index++
         }
 
-        text.first()
-        val confirmedText = StringBuilder()
-        for (i in 0 until committedCount) {
-            confirmedText.append(text.current())
-            text.next()
+        override fun paintComponent(g: Graphics) {
+            super.paintComponent(g)
+            composition.draw(g)
         }
-
-        if (confirmedText.isNotEmpty()) {
-            for (c in confirmedText) {
-                composition.insert(Character(c))
-            }
-            repaint()
-        }
-    }
-
-    override fun paintComponent(g: Graphics) {
-        super.paintComponent(g)
-        composition.draw(g)
     }
 }
 
