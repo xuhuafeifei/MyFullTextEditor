@@ -1,13 +1,15 @@
 import java.awt.*
+import java.awt.datatransfer.DataFlavor
 import java.awt.event.*
 import java.awt.font.TextHitInfo
 import java.awt.im.InputMethodRequests
+import java.awt.image.BufferedImage
 import java.text.AttributedCharacterIterator
 import java.text.AttributedString
 import java.text.CharacterIterator
 import javax.swing.*
 
-val maxWidth: Int = 500
+val maxWidth: Int = 580
 data class Vec2(val x: Int, val y: Int)
 data class Vec4(val x: Int, val y: Int, val w: Int, val h: Int)
 
@@ -21,7 +23,7 @@ interface Glyph {
      * 宽, 高
      */
     var size: Vec2
-    fun insert(glyph: Glyph, index: Int = 0): Unit = throw UnsupportedOperationException()
+    fun insert(glyph: Glyph, index: Int = 0, isCentered: Boolean = false): Unit = throw UnsupportedOperationException()
     fun remove(index: Int): Unit = throw UnsupportedOperationException()
     fun draw(g: java.awt.Graphics)
     fun drawSelection(g: java.awt.Graphics, x: Int, y: Int, w: Int, h: Int): Unit = Unit
@@ -83,6 +85,39 @@ class Character(private val char: Char, private val fontSize: Int = 16, private 
         return vec4(x, y, size)
     }
     fun getChar(): Char = char
+}
+
+class ImageGlyph(val image: Image) : Glyph {
+    override var x: Int = 0
+    override var y: Int = 0
+    override var size: Vec2 = Vec2(image.getWidth(null), image.getHeight(null))
+
+//    // 缩小图片到指定宽度
+//    init {
+//        val ratio = image.height.toDouble() / image.width
+//        val newWidth = minOf(image.width, maxWidth)
+//        val newHeight = (newWidth * ratio).toInt()
+//        scaledImage = BufferedImage(newWidth, newHeight, image.type).apply {
+//            createGraphics().run {
+//                drawImage(image, 0, 0, newWidth, newHeight, null)
+//                dispose()
+//            }
+//        }
+//        size = Vec2(newWidth, newHeight)
+//    }
+
+    override fun draw(g: Graphics) {
+        g.drawImage(image, x, y, null)
+    }
+
+    override fun layout(x: Int, y: Int, g: Graphics): Vec4 {
+        this.x = x
+        this.y = y
+        return Vec4(x, y, image.getWidth(null), image.getHeight(null))
+    }
+
+    override fun getHeight(): Int = size.y
+    override fun getWidth(): Int = size.x
 }
 
 class DefaultGlyph : Glyph {
@@ -155,7 +190,7 @@ class Row(private val isCentered: Boolean = false) : Glyph {
 
     override fun getHeight(): Int = size.y
     override fun getWidth(): Int = size.x
-    override fun insert(glyph: Glyph, index: Int): Unit = children.add(index, glyph)
+    override fun insert(glyph: Glyph, index: Int, isCentered: Boolean): Unit = children.add(index, glyph)
     override fun remove(index: Int): Unit {
         if (index in children.indices) {
             children.removeAt(index)
@@ -240,7 +275,7 @@ class Composition(glyph: Glyph) : Glyph by glyph {
         rows.add(Row(true))
     }
 
-    fun insert(glyph: Glyph, isCentered: Boolean) {
+    override fun insert(glyph: Glyph, index: Int, isCentered: Boolean) {
         val row = rows[caret.row]
         row.insert(glyph, caret.col)
         caret.col++
@@ -514,7 +549,7 @@ class Editor : JPanel(BorderLayout()) {
                     if (ch == '\n') return
 
                     if (ch.isASCII() && !ch.isISOControl()) {
-                        composition.insert(Character(ch, currentFontSize, isBold), isCentered)
+                        composition.insert(Character(ch, currentFontSize, isBold), isCentered=isCentered)
                         repaint()
                         e.consume()
                     }
@@ -556,6 +591,35 @@ class Editor : JPanel(BorderLayout()) {
                     }
                 }
             })
+
+            inputMap.put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_V, Toolkit.getDefaultToolkit().menuShortcutKeyMaskEx),
+                "pasteImage"
+            )
+
+            actionMap.put("pasteImage", object : AbstractAction() {
+                override fun actionPerformed(e: ActionEvent?) {
+                    val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+                    val contents = clipboard.getContents(null)
+                    if (contents != null && contents.isDataFlavorSupported(DataFlavor.imageFlavor)) {
+                        val image = contents.getTransferData(DataFlavor.imageFlavor) as Image
+
+                        composition.insert(ImageGlyph(image), isCentered=isCentered)
+                        repaint()
+                    } else {
+                        // 当作文字处理
+                        try {
+                            val text = clipboard.getData(DataFlavor.stringFlavor) as String
+                            for (c in text) {
+                                composition.insert(Character(c, currentFontSize, isBold), isCentered = isCentered)
+                            }
+                            repaint()
+                        } catch (ignored: Exception) {
+                            // 忽略异常
+                        }
+                    }
+                }
+            })
         }
 
         override fun getInputMethodRequests(): InputMethodRequests {
@@ -587,7 +651,7 @@ class Editor : JPanel(BorderLayout()) {
 
             if (confirmedText.isNotEmpty()) {
                 for (c in confirmedText) {
-                    composition.insert(Character(c, currentFontSize, isBold), isCentered)
+                    composition.insert(Character(c, currentFontSize, isBold), isCentered=isCentered)
                 }
                 repaint()
             }
@@ -600,13 +664,12 @@ class Editor : JPanel(BorderLayout()) {
     }
 }
 
-
 fun main() {
     javax.swing.SwingUtilities.invokeLater {
         val frame = javax.swing.JFrame("飞哥不鸽文本编辑器").apply {
             defaultCloseOperation = javax.swing.JFrame.EXIT_ON_CLOSE
             contentPane.add(Editor())
-            setSize(600, 400)
+            setSize(maxWidth + 20, 400)
             isVisible = true
         }
     }
