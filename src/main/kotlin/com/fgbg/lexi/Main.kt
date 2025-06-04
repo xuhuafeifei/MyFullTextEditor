@@ -9,7 +9,8 @@ import java.text.AttributedString
 import java.text.CharacterIterator
 import javax.swing.*
 
-val maxWidth: Int = 580
+const val maxWidth: Int = 580
+const val maxHeight: Int = 400
 data class Vec2(val x: Int, val y: Int)
 data class Vec4(val x: Int, val y: Int, val w: Int, val h: Int)
 
@@ -201,12 +202,15 @@ class Row(private val isCentered: Boolean = false) : Glyph {
             glyph.draw(g)
         }
     }
-    fun drawSelection(g: java.awt.Graphics, from: Int, to: Int) {
-        val len = children.size
-        if (from > len || from < 0 || to > len || to < 0) return
+    fun drawSelection(g: Graphics, from: Int, to: Int) {
         for (i in from..<to) {
             val glyph = children[i]
-            glyph.drawSelection(g, glyph.getPosition().x, y, glyph.getWidth(), getHeight())
+            val oldColor = g.color
+            val pos = glyph.getPosition()
+            g.color = Color(0, 120, 215, 100)
+            g.fillRect(pos.x, pos.y, glyph.getWidth(), glyph.getHeight())
+            g.color = oldColor
+            glyph.draw(g)
         }
     }
     fun getChildren(): MutableList<Glyph> = children
@@ -214,6 +218,63 @@ class Row(private val isCentered: Boolean = false) : Glyph {
         children.addAll(glyphs)
     }
     override fun getPosition(): Vec2 = Vec2(x, y)
+}
+
+data class CompositionMemento(
+    val snapshot: List<List<Glyph>>,
+    val caretRow: Int,
+    val caretCol: Int
+)
+
+class CommandManager {
+    private val undoStack = mutableListOf<CompositionMemento>()
+    private val redoStack = mutableListOf<CompositionMemento>()
+
+    fun backup(comp: Composition) {
+        undoStack.add(comp.createMemento())
+        redoStack.clear()
+    }
+
+    fun undo(comp: Composition) {
+        if (undoStack.isNotEmpty()) {
+            redoStack.add(comp.createMemento())
+            comp.restoreMemento(undoStack.removeLast())
+        }
+    }
+
+    fun redo(comp: Composition) {
+        if (redoStack.isNotEmpty()) {
+            undoStack.add(comp.createMemento())
+            comp.restoreMemento(redoStack.removeLast())
+        }
+    }
+}
+
+abstract class GlyphDecorator(protected val component: Glyph) : Glyph by component
+
+class BorderDecorator(component: Glyph) : GlyphDecorator(component) {
+    override fun draw(g: Graphics) {
+        // 画原始内容
+        component.draw(g)
+
+        // 绘制边框
+        val pos = component.getPosition()
+        val w = component.getWidth()
+        val h = component.getHeight()
+
+        g.color = Color.GRAY
+        g.drawRect(pos.x - 5, pos.y - 5, w + 10, h + 10)
+    }
+}
+
+class ScrollerDecorator(component: Glyph) : GlyphDecorator(component) {
+    override fun draw(g: Graphics) {
+        component.draw(g)
+        // 画滚动条（模拟）
+        g.color = Color.LIGHT_GRAY
+        g.fillRect(580, 20, 8, 200) // 右边滚动条
+        g.fillRect(20, 360, 540, 8) // 底部滚动条
+    }
 }
 
 // Composition.kt
@@ -239,7 +300,27 @@ class Composition(glyph: Glyph) : Glyph by glyph {
     var selectionEnd: Vec2 = Vec2(-1, -1)    // 选中结束位置
 
     // 检查是否有选中文本
-    fun hasSelection(): Boolean = selectionStart.x >= 0 && selectionEnd.x >= 0
+    private fun hasSelection(): Boolean = selectionStart.x >= 0 && selectionEnd.x >= 0
+
+    override fun getWidth(): Int = maxWidth + 20
+
+    override fun getHeight(): Int = maxHeight - 40
+
+    fun createMemento(): CompositionMemento {
+        val clonedRows = rows.map { it.getChildren().toList() }
+        return CompositionMemento(clonedRows, caret.row, caret.col)
+    }
+
+    fun restoreMemento(memento: CompositionMemento) {
+        rows.clear()
+        for (glyphs in memento.snapshot) {
+            val row = Row(true)
+            row.addAll(glyphs)
+            rows.add(row)
+        }
+        caret.row = memento.caretRow
+        caret.col = memento.caretCol
+    }
 
     // 清除选中状态
     fun clearSelection() {
@@ -384,7 +465,7 @@ class Composition(glyph: Glyph) : Glyph by glyph {
         }
     }
 
-    fun drawSelection(g: Graphics) {
+    private fun drawSelection(g: Graphics) {
         val (startRow, startCol) = selectionStart
         val (endRow, endCol) = selectionEnd
 
@@ -404,9 +485,6 @@ class Composition(glyph: Glyph) : Glyph by glyph {
 
         g.color = oldColor // 恢复默认颜色
     }
-
-    fun getRows(): List<Row> = rows
-
     private fun wrapLine(isCentered: Boolean) {
         newLine(isCentered)
     }
@@ -511,7 +589,9 @@ class Editor : JPanel(BorderLayout()) {
 
     inner class EditorComponent : JComponent() {
         private val composition = Composition(DefaultGlyph())
+        private val decorated: Glyph = ScrollerDecorator(BorderDecorator(composition))
         private var isDragging = false
+        private val commandManager = CommandManager()
 
         // 当前状态设置
         private val currentFontSize: Int
@@ -538,8 +618,14 @@ class Editor : JPanel(BorderLayout()) {
                         KeyEvent.VK_RIGHT -> composition.moveRight()
                         KeyEvent.VK_UP -> composition.moveUp()
                         KeyEvent.VK_DOWN -> composition.moveDown()
-                        KeyEvent.VK_BACK_SPACE -> composition.delete()
-                        KeyEvent.VK_ENTER -> composition.newLine(isCentered)
+                        KeyEvent.VK_BACK_SPACE -> {
+                            commandManager.backup(composition)
+                            composition.delete()
+                        }
+                        KeyEvent.VK_ENTER -> {
+                            commandManager.backup(composition)
+                            composition.newLine(isCentered)
+                        }
                     }
                     repaint()
                 }
@@ -547,9 +633,9 @@ class Editor : JPanel(BorderLayout()) {
                 override fun keyTyped(e: KeyEvent) {
                     val ch = e.keyChar
                     if (ch == '\n') return
-
                     if (ch.isASCII() && !ch.isISOControl()) {
-                        composition.insert(Character(ch, currentFontSize, isBold), isCentered=isCentered)
+                        commandManager.backup(composition)
+                        composition.insert(Character(ch, currentFontSize, isBold), isCentered = isCentered)
                         repaint()
                         e.consume()
                     }
@@ -596,7 +682,20 @@ class Editor : JPanel(BorderLayout()) {
                 KeyStroke.getKeyStroke(KeyEvent.VK_V, Toolkit.getDefaultToolkit().menuShortcutKeyMaskEx),
                 "pasteImage"
             )
-
+            inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_Z, Toolkit.getDefaultToolkit().menuShortcutKeyMaskEx), "undo")
+            inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_Y, Toolkit.getDefaultToolkit().menuShortcutKeyMaskEx), "redo")
+            actionMap.put("undo", object : AbstractAction() {
+                override fun actionPerformed(e: ActionEvent?) {
+                    commandManager.undo(composition)
+                    repaint()
+                }
+            })
+            actionMap.put("redo", object : AbstractAction() {
+                override fun actionPerformed(e: ActionEvent?) {
+                    commandManager.redo(composition)
+                    repaint()
+                }
+            })
             actionMap.put("pasteImage", object : AbstractAction() {
                 override fun actionPerformed(e: ActionEvent?) {
                     val clipboard = Toolkit.getDefaultToolkit().systemClipboard
@@ -659,7 +758,7 @@ class Editor : JPanel(BorderLayout()) {
 
         override fun paintComponent(g: Graphics) {
             super.paintComponent(g)
-            composition.draw(g)
+            decorated.draw(g)
         }
     }
 }
@@ -669,7 +768,7 @@ fun main() {
         val frame = javax.swing.JFrame("飞哥不鸽文本编辑器").apply {
             defaultCloseOperation = javax.swing.JFrame.EXIT_ON_CLOSE
             contentPane.add(Editor())
-            setSize(maxWidth + 20, 400)
+            setSize(maxWidth + 20, maxHeight)
             isVisible = true
         }
     }
